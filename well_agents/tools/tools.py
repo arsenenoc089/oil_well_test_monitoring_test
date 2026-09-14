@@ -10,6 +10,22 @@ from pydantic import BaseModel
 
 this_dir = Path(__file__).parent
 file_path = this_dir.parent / "mem.txt"
+MEMORY_FIELDS = [
+    'Date',
+    'WellName',
+    'Anomaly',
+    'AnomalyType',
+    'WTLIQ',
+    'WTOil',
+    'WTTHP',
+    'WTWCT',
+    'Z1Status',
+    'Z2Status',
+    'Z3Status',
+    'Z1BHP',
+    'Z2BHP',
+    'Z3BHP',
+]
 
 # Tools
 @function_tool
@@ -45,8 +61,14 @@ def save_test_memory(welldata: WellTestContext, file_path: str,
         welldata.Z3BHP        
     ]
     
-    with open(file_path, 'a') as f:
-        f.write(', '.join(map(str, fields)) + '\n')
+    target_path = Path(file_path)
+    should_write_header = not target_path.exists() or target_path.stat().st_size == 0
+
+    with open(target_path, 'a', newline='') as f:
+        writer = csv.writer(f)
+        if should_write_header:
+            writer.writerow(MEMORY_FIELDS)
+        writer.writerow(fields)
     
 class WellTestData(BaseModel):
     Date: datetime
@@ -67,32 +89,33 @@ class WellTestData(BaseModel):
 
 def load_well_memory_data(filepath: str) -> List[WellTestData]:
     well_data = []
+    target_path = Path(filepath)
+
+    if not target_path.exists() or target_path.stat().st_size == 0:
+        return well_data
     
-    with open(filepath, 'r') as file:
-        # Skip the header row
-        next(file)
-        
-        # Create CSV reader
-        csv_reader = csv.reader(file)
+    with open(target_path, 'r', newline='') as file:
+        csv_reader = csv.DictReader(file)
         
         for row in csv_reader:
-            # Clean up whitespace and create dictionary
-            cleaned_row = [item.strip() for item in row]
+            if not row or not row.get('Date'):
+                continue
+
             data_dict = {
-                'Date': datetime.strptime(cleaned_row[0], '%Y-%m-%d'),
-                'WellName': cleaned_row[1],
-                'Anomaly': cleaned_row[2].lower() == 'true',
-                'AnomalyType': cleaned_row[3],
-                'WTLIQ': float(cleaned_row[4]),
-                'WTOil': float(cleaned_row[5]),
-                'WTTHP': float(cleaned_row[6]),
-                'WTWCT': float(cleaned_row[7]),
-                'Z1Status': cleaned_row[8],
-                'Z2Status': cleaned_row[9],
-                'Z3Status': cleaned_row[10],
-                'Z1BHP': float(cleaned_row[11]),
-                'Z2BHP': float(cleaned_row[12]),
-                'Z3BHP': float(cleaned_row[13])
+                'Date': datetime.strptime(row['Date'].strip(), '%Y-%m-%d'),
+                'WellName': row['WellName'].strip(),
+                'Anomaly': row['Anomaly'].strip().lower() == 'true',
+                'AnomalyType': row['AnomalyType'].strip(),
+                'WTLIQ': float(row['WTLIQ']),
+                'WTOil': float(row['WTOil']),
+                'WTTHP': float(row['WTTHP']),
+                'WTWCT': float(row['WTWCT']),
+                'Z1Status': row['Z1Status'].strip(),
+                'Z2Status': row['Z2Status'].strip(),
+                'Z3Status': row['Z3Status'].strip(),
+                'Z1BHP': float(row['Z1BHP']),
+                'Z2BHP': float(row['Z2BHP']),
+                'Z3BHP': float(row['Z3BHP'])
             }
             well_data.append(WellTestData(**data_dict))
     

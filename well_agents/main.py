@@ -61,15 +61,27 @@ INTERPRETATOR_AGENT = Agent(
 
 #Function to run the agents
 async def main():
+    openai_ready = bool(os.getenv("OPENAI_API_KEY"))
+    memory_data = []
+    memory_error = None
+
+    try:
+        memory_data = load_well_memory_data(mem_file_path)
+    except Exception as e:
+        logger.error(f"Error loading memory data: {e}")
+        memory_error = e
 
     #Sidebar
     with st.sidebar:
         st.title("WellWatch")
         st.subheader("Oil Well Test Monitoring with Agentic AI")
-
-    with st.sidebar:
         st.divider()
-        st.markdown('Select a well below:')
+        st.caption("Workflow")
+        if openai_ready:
+            st.success("OpenAI API key loaded")
+        else:
+            st.warning("OpenAI API key missing")
+
         chosen_well = ui.select("Well", options=['cheetah-90', 'cheetah-20', 'cheetah-10'], key="well_select")
 
         if chosen_well:
@@ -90,12 +102,16 @@ async def main():
             dates = df['Date'].unique().tolist()
             dates.sort()
 
+            logger.info(f"Data loaded for well {chosen_well} with {len(df)} rows")
+            st.success(f"{len(df)} well tests loaded")
+            st.caption(f"{dates[0]} to {dates[-1]}")
 
-        logger.info(f"Data loaded for well {chosen_well} with {len(df)} rows")
-        st.sidebar.success(f"Data loaded for well {chosen_well} with {len(df)} rows")
+        selected_date = ui.select("Well test date", options=dates, key="date_select")
+        st.divider()
+        agentic_ai_button = ui.button("Run AI Agents", key="agentic_ai", disabled=not openai_ready)
 
-        st.markdown('Select a well test date below:')
-    selected_date = ui.select("Well test date", options=dates, key="date_select")
+        if not openai_ready:
+            st.caption("Add OPENAI_API_KEY to .env to run the agents.")
 
     if selected_date:
         #select the data up until the selected date
@@ -107,6 +123,19 @@ async def main():
         df_aggrid['Date'] = pd.to_datetime(df_aggrid['Date'])
         df_aggrid = df_aggrid[['Date', 'WellName', 'WTLIQ', 'WTOil', 'WTTHP', 'WTWCT', 'Z1BHP',
             'Z2BHP', 'Z3BHP']]
+
+        selected_test = df.tail(1).iloc[0]
+        oil_delta = selected_test['WTOil'] - selected_test['dca_rate']
+        liquid_delta = df['WTLIQ'].iloc[-1] - df['WTLIQ'].iloc[-2] if len(df) > 1 else None
+        oil_metric_delta = f"{oil_delta:,.0f} vs DCA"
+        liquid_metric_delta = f"{liquid_delta:,.0f} vs prior" if liquid_delta is not None else None
+
+        kpi_cols = st.columns(5)
+        kpi_cols[0].metric("Oil rate", f"{selected_test['WTOil']:,.0f}", oil_metric_delta)
+        kpi_cols[1].metric("Liquid rate", f"{selected_test['WTLIQ']:,.0f}", liquid_metric_delta)
+        kpi_cols[2].metric("Water cut", f"{selected_test['WTWCT']:.2f}")
+        kpi_cols[3].metric("THP", f"{selected_test['WTTHP']:,.0f}")
+        kpi_cols[4].metric("Avg BHP", f"{selected_test['mean_bhp']:,.0f}")
 
         st.subheader("Well test chart")
         fig = go.Figure()
@@ -155,9 +184,20 @@ async def main():
         grid_options = gb.build()
         grid_return = AgGrid(df_aggrid, gridOptions=grid_options, editable=True, allow_unsafe_jscode=True, height=300, fit_columns_on_grid_load=True)
 
+        with st.expander("Memory history", expanded=False):
+            if memory_error:
+                st.warning("Memory file could not be loaded.")
+            elif memory_data:
+                memory_df = pd.DataFrame([item.model_dump() for item in memory_data])
+                memory_df = memory_df.loc[memory_df['WellName'] == chosen_well]
 
-    # Ensure the entire workflow is a single trace
-    agentic_ai_button = ui.button("Run AI Agents", key="agentic_ai")
+                if memory_df.empty:
+                    st.info(f"No saved memory for {chosen_well} yet.")
+                else:
+                    st.dataframe(memory_df, width='stretch', hide_index=True)
+            else:
+                st.info("No saved memory yet.")
+
 
     #add image of agentic flow
     image_path = os.path.join(base_path, "agentic_ai.png")
@@ -176,39 +216,54 @@ async def main():
         #Define the context
         context = CONTEXT_PROMPT
 
-        #load memory data\
-        try:
-            logger.info(f"Loading memory data from {mem_file_path}")
-            memory_data = load_well_memory_data(mem_file_path)
-            logger.info(f"Memory data loaded successfully")
-        except Exception as e:
-            logger.error(f"Error loading memory data: {e}")
-            memory_data = []
-
         well_test_input = WellTestContext(**df)
         logger.info(f"well test input {well_test_input}")
+        banner = st.empty()
+        st.subheader("Agentic AI review")
+
         with trace("Deterministic story flow"):
+            workflow_status = st.status("Starting agent workflow", expanded=True)
 
             # Run the anomaly detection agent
             logger.info(f"The anomaly detector agent is at work...")
-            result_anomaly = await Runner.run(anomaly_detection_agent, input=f' Here are the well test data {well_test_input.model_dump()}' , context=context)
+            workflow_status.write("Anomaly detector is reviewing the selected well test")
+            with st.spinner("Anomaly detector is reviewing the selected well test..."):
+                result_anomaly = await Runner.run(anomaly_detection_agent, input=f' Here are the well test data {well_test_input.model_dump()}' , context=context)
             logger.info(f"The anomaly detector agent has completed its work...")
+            workflow_status.write("Anomaly detector complete")
 
-            st.write("Agentic AI workflow has been triggered - See the results in the card below")
             with st.container(border=True):
                 st.subheader("Anomaly detector agent")
                 st.write(str(result_anomaly.final_output.Short_summary))
 
             # Run the memory saver agent
             logger.info(f"Now the memory savor agent is at work...")
-            result_memory = await Runner.run(MEMORY_SAVER_AGENT, input=f' Here are the well test data {well_test_input.model_dump()} and this is what the anomaly analysis result is {result_anomaly.final_output}' , context=context)
+            workflow_status.write("Memory saver is recording the agent assessment")
+            with st.spinner("Memory saver is recording the assessment..."):
+                result_memory = await Runner.run(MEMORY_SAVER_AGENT, input=f' Here are the well test data {well_test_input.model_dump()} and this is what the anomaly analysis result is {result_anomaly.final_output}' , context=context)
             logger.info(f"The memory savor agent has completed its work...")
+            workflow_status.write("Memory saver complete")
+
+            with st.container(border=True):
+                st.subheader("Memory saver agent")
+                st.markdown(f"**Anomaly:** {result_memory.final_output.Anomaly}")
+                st.markdown(f"**Anomaly Type:** {result_memory.final_output.AnomalyType}")
+                st.markdown(f"**Zone Status:** Z1 {result_memory.final_output.Z1Status}, Z2 {result_memory.final_output.Z2Status}, Z3 {result_memory.final_output.Z3Status}")
 
             # Run the interpretator agent
             logger.info(f"Now the insights interpreter agent is at work...")
-            result_interpretator = await Runner.run(INTERPRETATOR_AGENT, 
-                                                    input=f'Here are the well test data {well_test_input.model_dump()} and this is what the anomaly analysis result for this well test is {result_anomaly.final_output} - The memory data has past welltest {memory_data}', context=context)
+            workflow_status.write("Interpreter is turning the assessment into an engineering action")
+            with st.spinner("Interpreter is preparing the engineering recommendation..."):
+                result_interpretator = await Runner.run(INTERPRETATOR_AGENT, 
+                                                        input=f'Here are the well test data {well_test_input.model_dump()} and this is what the anomaly analysis result for this well test is {result_anomaly.final_output} - The memory data has past welltest {memory_data}', context=context)
             logger.info(f"The insights interpreter agent has completed its work...")
+            workflow_status.write("Interpreter complete")
+            workflow_status.update(label="Agent workflow complete", state="complete", expanded=False)
+
+            if result_memory.final_output.Anomaly:
+                banner.error(f"Anomaly detected: {result_memory.final_output.AnomalyType}. {result_interpretator.final_output.EngineerAction}")
+            else:
+                banner.success(f"No anomaly detected. {result_interpretator.final_output.EngineerAction}")
             
             with st.container(border=True):
                 st.subheader("Insights Interpretation agent")
