@@ -19,8 +19,10 @@ import plotly.graph_objects as go
 
 
 base_path = os.path.dirname(__file__)
+repo_path = os.path.dirname(base_path)
 mem_file_path = os.path.join(base_path, "mem.txt")
 well_test_data_path = os.path.join(base_path, "data", "RMO_Agentic AI_train_test.xlsx")
+env_file_path = os.path.join(repo_path, ".env")
 st.set_page_config(layout="wide")
 
 #Load environment variables
@@ -29,7 +31,7 @@ try:
     openai_key = st.secrets["api_keys"]["openai"]
     os.environ["OPENAI_API_KEY"] = openai_key
 except:
-    load_dotenv()
+    load_dotenv(dotenv_path=env_file_path)
 
 
 #Prompts
@@ -106,59 +108,52 @@ async def main():
         df_aggrid = df_aggrid[['Date', 'WellName', 'WTLIQ', 'WTOil', 'WTTHP', 'WTWCT', 'Z1BHP',
             'Z2BHP', 'Z3BHP']]
 
-        value = ui.tabs(options=['Well test chart', 'Well test datatable'], value='Well test chart', key="kanaries")
+        st.subheader("Well test chart")
+        fig = go.Figure()
 
-        if value == "Well test chart":
-            #Charts
-            # Option 1: Single plot with all lines
-            fig = go.Figure()
+        for column in ['WTLIQ', 'WTOil', 'WTWCT', 'Z1BHP','Z2BHP', 'Z3BHP']:
+            fig.add_trace(go.Scatter(
+                x=df['Date'],
+                y=df[column],
+                mode='lines',
+                name=column
+            ))
 
-            # Add each column as a separate line
-            for column in ['WTLIQ', 'WTOil', 'WTWCT', 'Z1BHP','Z2BHP', 'Z3BHP']:  # Skip the Date column
-                fig.add_trace(go.Scatter(
-                    x=df['Date'],
-                    y=df[column],
-                    mode='lines',
-                    name=column
-                ))
+        fig.update_layout(
+            title="Well test data: WT OIL, WT WCT, WT Liq, Z1 BHP, Z2 BHP & Z3 BHP",
+            xaxis_title="Date",
+            yaxis_title="Value",
+            legend_title="Columns",
+            height=500
+        )
 
-            fig.update_layout(
-                title="Well test data: WT OIL, WT WCT, WT Liq, Z1 BHP, Z2 BHP & Z3 BHP",
-                xaxis_title="Date",
-                yaxis_title="Value",
-                legend_title="Columns",
-                height=500
-            )
+        st.plotly_chart(fig, width='stretch')
 
-            st.plotly_chart(fig, width='stretch')
-        elif value == "Well test datatable":
-            # Build grid options
-            gb = GridOptionsBuilder.from_dataframe(df_aggrid)
+        st.subheader("Well test datatable")
+        gb = GridOptionsBuilder.from_dataframe(df_aggrid)
 
-            # Cell styling for the 'Value' column based on threshold
-            cellstyle_jscode = JsCode("""
-            function(params) {
-                if (params.value < 5000) {
-                    return {
-                        'color': 'white',
-                        'backgroundColor': 'salmon'
-                    }
-                } else {
-                    return {
-                        'color': 'black',
-                        'backgroundColor': 'white'
-                    }
+        cellstyle_jscode = JsCode("""
+        function(params) {
+            if (params.value < 5000) {
+                return {
+                    'color': 'white',
+                    'backgroundColor': 'salmon'
                 }
-            };
-            """)
+            } else {
+                return {
+                    'color': 'black',
+                    'backgroundColor': 'white'
+                }
+            }
+        };
+        """)
 
-            # Apply conditional formatting to multiple columns
-            columns_to_style = ['Z1BHP','Z2BHP', 'Z3BHP']
-            for col in columns_to_style:
-                gb.configure_column(col, cellStyle=cellstyle_jscode)
-            # Build the grid options
-            grid_options = gb.build()
-            grid_return = AgGrid(df_aggrid, gridOptions=grid_options,editable=True, allow_unsafe_jscode=True, width = 800, height=300, fit_columns_on_grid_load=True)
+        columns_to_style = ['Z1BHP','Z2BHP', 'Z3BHP']
+        for col in columns_to_style:
+            gb.configure_column(col, cellStyle=cellstyle_jscode)
+
+        grid_options = gb.build()
+        grid_return = AgGrid(df_aggrid, gridOptions=grid_options, editable=True, allow_unsafe_jscode=True, height=300, fit_columns_on_grid_load=True)
 
 
     # Ensure the entire workflow is a single trace
@@ -200,10 +195,9 @@ async def main():
             logger.info(f"The anomaly detector agent has completed its work...")
 
             st.write("Agentic AI workflow has been triggered - See the results in the card below")
-            with ui.card(key="card1"):
-                ui.element("h3", children=["Anomaly detector agent:"], className="font-bold ")
-                with ui.element("div", className="flex justify-between bg-stone-200 rounded-sm "):
-                    ui.element("span", children=[str(result_anomaly.final_output.Short_summary)], className="font-Medium")
+            with st.container(border=True):
+                st.subheader("Anomaly detector agent")
+                st.write(str(result_anomaly.final_output.Short_summary))
 
             # Run the memory saver agent
             logger.info(f"Now the memory savor agent is at work...")
@@ -216,20 +210,12 @@ async def main():
                                                     input=f'Here are the well test data {well_test_input.model_dump()} and this is what the anomaly analysis result for this well test is {result_anomaly.final_output} - The memory data has past welltest {memory_data}', context=context)
             logger.info(f"The insights interpreter agent has completed its work...")
             
-            with ui.card(key="card2"):
-                ui.element("h3", children=["Insights Interpretation agent:"], className="font-bold ")
-                with ui.element("div", className="flex bg-stone-200 rounded-sm"):
-                    ui.element("h4", children=["Zonal Config: "], className="font-semibold")
-                    ui.element("span", children=[str(result_interpretator.final_output.ZonalConfiguration)], className="font-Medium")
-                with ui.element("div", className="flex bg-stone-200 rounded-sm"):
-                    ui.element("h4", children=["Interpretation: "], className="font-semibold")
-                    ui.element("span", children=[str(result_interpretator.final_output.Interpretation)], className="font-Medium inline-block")
-                with ui.element("div", className="flex bg-stone-200 rounded-sm"):
-                    ui.element("h4", children=["EngineerAction: "], className="font-semibold")
-                    ui.element("span", children=[str(result_interpretator.final_output.EngineerAction)], className="font-Medium")
-                with ui.element("div", className="flex bg-stone-200 rounded-sm"):
-                    ui.element("h4", children=["InsightsSummary: "], className="font-semibold")
-                    ui.element("span", children=[str(result_interpretator.final_output.InsightsSummary)], className="font-Medium")
+            with st.container(border=True):
+                st.subheader("Insights Interpretation agent")
+                st.markdown(f"**Zonal Config:** {result_interpretator.final_output.ZonalConfiguration}")
+                st.markdown(f"**Interpretation:** {result_interpretator.final_output.Interpretation}")
+                st.markdown(f"**Engineer Action:** {result_interpretator.final_output.EngineerAction}")
+                st.markdown(f"**Insights Summary:** {result_interpretator.final_output.InsightsSummary}")
             
             with open(mem_file_path, 'r') as f:
                 logger.info(f"This has been saved in the memory file: {f.read()}")
