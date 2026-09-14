@@ -1,0 +1,12 @@
+scikit-learn
+pandas
+statsmodels
+plotly
+openpyxl
+openai-agents
+loguru
+streamlit-shadcn-ui
+streamlit-aggrid
+streamlit
+openai
+python-dotenv
